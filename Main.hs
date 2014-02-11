@@ -29,15 +29,15 @@ parseIP = do
   four <- decimal
   return $ IP one two three four
 
-getUrl parser headers url = do
-  request <- (\r -> r { requestHeaders = headers }) <$> parseUrl url
+request url method headers parser = do
+  request <- (\r -> r { requestHeaders = headers, method = method }) <$> parseUrl url
   withManager tlsManagerSettings $ \manager ->
     withHTTP request manager $ \response ->
       evalStateT (parse parser) (responseBody response)
 
-getPublicIP = getUrl parseIP [] "http://wtfismyip.com/text"
+requestPublicIP = request "http://wtfismyip.com/text" methodGet [] parseIP
 
-getDNSRecord headers = filter predicate . records <$> json
+requestDNSRecord headers = filter predicate . records <$> json
   where predicate (_, t, n, _) = (t, n) == ("A", "szczyp.com")
         records = zip4
                   <$> scope "content"
@@ -49,22 +49,20 @@ getDNSRecord headers = filter predicate . records <$> json
                   . values
                   . key k
                   . _String
-        json = getUrl json' headers "https://api.name.com/api/dns/list/szczyp.com"
+        json = request  "https://api.name.com/api/dns/list/szczyp.com" methodGet headers json'
 
-currentIP = parseOnly parseIP . encodeUtf8 . view (_head . _1)
+ip = parseOnly parseIP . encodeUtf8 . view (_head . _1)
 
-getHeaders :: IO [Header]
-getHeaders = read <$> readFile "headers"
+readHeaders = readFile "headers" >>= tryAnyDeep . return . read
 
 main = do
-  headers <- tryAnyDeep getHeaders
+  headers <- readHeaders
   case headers of
     Left _ -> print "can't parse headers for api username and token"
     Right headers -> do
-      publicIP <- getPublicIP
-      dns <- getDNSRecord headers
-      if hush publicIP == (hush $ currentIP dns)
+      publicIP <- requestPublicIP
+      dns <- requestDNSRecord headers
+      if hush publicIP == (hush $ ip dns)
         then print "IP didn't change"
         else do print "IP did change"
                 print dns
-
