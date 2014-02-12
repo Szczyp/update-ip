@@ -44,7 +44,7 @@ request url method headers body parser = do
 requestPublicIP = request "http://wtfismyip.com/text" methodGet [] Nothing parseIP
 
 requestDNSRecord headers = filter predicate . records <$> json
-  where predicate (_, t, n, _) = (t, n) == ("A", "test.szczyp.com")
+  where predicate (_, t, n, _) = (t, n) == ("A", "szczyp.com")
         records = zip4
                   <$> scope "content"
                   <*> scope "type"
@@ -83,7 +83,7 @@ postDNSRecord headers ip = result
                . encode
                . object
                $ [("type", String "A")
-                 ,("hostname" , String "test")
+                 ,("hostname" , String "")
                  ,("content", String . toText $ ip)
                  ,("ttl", Number 300)]
 
