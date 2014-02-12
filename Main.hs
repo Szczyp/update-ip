@@ -16,6 +16,7 @@ import           Network.HTTP.Types
 import           Pipes.Attoparsec                 (parse)
 import           Pipes.HTTP
 import           Prelude                          (read)
+import           System.Environment
 
 data IP = IP Word8 Word8 Word8 Word8 deriving (Show, Eq)
 
@@ -89,7 +90,10 @@ postDNSRecord headers ip = result
 
 getIP = parseOnly parseIP . encodeUtf8 . view (_head . _1)
 
-readHeaders = readFile "headers" >>= tryAnyDeep . return . read
+readHeaders = tryAnyDeep $ do
+  root <- getExecutablePath
+  contents <- readFile $ directory (fpFromString root) </> fpFromText "headers"
+  return $ read contents
 
 main = do
   headers <- readHeaders
