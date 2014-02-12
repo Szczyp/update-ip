@@ -62,7 +62,7 @@ deleteDNSRecord headers dns = select <$> result
         result = request
                  "https://api.name.com/api/dns/delete/szczyp.com"
                  methodDelete
-                 headers
+                 ([("Content-type", "application/json")] ++ headers)
                  body
                  json'
         body = Just
@@ -75,7 +75,7 @@ postDNSRecord headers ip = result
   where result = request
                  "https://api.name.com/api/dns/create/szczyp.com"
                  methodPost
-                 headers
+                 ([("Content-type", "application/json")] ++ headers)
                  body
                  json'
         body = Just
