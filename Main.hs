@@ -68,7 +68,7 @@ type DNSRecord = (Text, Text, Text, Text)
 requestDNSRecord :: App [DNSRecord]
 requestDNSRecord = do
   domain <- pack . domain <$> ask
-  withAPI methodGet emptyBody >>= return . filter (predicate domain) . records
+  filter (predicate domain) . records <$> withAPI methodGet emptyBody
   where predicate domain (_, t, n, _) = (t, n) == ("A", domain)
         records = zip4
                   <$> scope "content"
@@ -78,14 +78,14 @@ requestDNSRecord = do
         scope k = toListOf $ key "records" . values . key k . _String
 
 deleteDNSRecord :: [DNSRecord] -> App Text
-deleteDNSRecord dns = withAPI methodDelete body >>= return . message
+deleteDNSRecord dns = message <$> withAPI methodDelete body
   where body = RequestBodyLBS
                . encode
                . object
                $ [("record_id", String (dns ^. _head . _4))]
 
 postDNSRecord :: IP -> App Text
-postDNSRecord ip = withAPI methodPost body >>= return . message
+postDNSRecord ip = message <$> withAPI methodPost body
   where body = RequestBodyLBS
                . encode
                . object
@@ -126,8 +126,8 @@ request url method headers body parser = do
   let req = r { method = method, requestHeaders = headers, requestBody = body }
   withManager tlsManagerSettings $ \manager ->
     withHTTP req manager $ \response ->
-      evalStateT (parse parser) (responseBody response)
-  >>= return . fmapL (const $ "Error parsing " ++ url)
+      fmapL (const $ "Error parsing " ++ url) <$> evalStateT (parse parser) (responseBody response)
+
 
 getIP :: [DNSRecord] -> Either String IP
 getIP = parseOnly parseIP . encodeUtf8 . view (_head . _1)
