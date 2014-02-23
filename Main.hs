@@ -67,7 +67,7 @@ type DNSRecord = (Text, Text, Text, Text)
 
 requestDNSRecord :: App [DNSRecord]
 requestDNSRecord = do
-  domain <- pack . domain <$> ask
+  domain <- asks $ pack . domain
   filter (predicate domain) . records <$> withAPI methodGet emptyBody
   where predicate domain (_, t, n, _) = (t, n) == ("A", domain)
         records = zip4
@@ -96,18 +96,15 @@ postDNSRecord ip = message <$> withAPI methodPost body
 
 withAPI :: ByteString -> RequestBody -> App Value
 withAPI method body = do
-  config <- ask
-  url <- liftEither . note "invalid method" $ getUrl config
+  AppConfig headers baseUrl domain <- ask
+  methodUrl <- liftEither . note "invalid method" $ lookup method methodMap
   liftIOEither $ request
-    url
+    (baseUrl ++ methodUrl ++ "/" ++ domain)
     method
-    ([("Content-type", "application/json")] ++ configHeaders config)
+    ([("Content-type", "application/json")] ++ headers)
     body
     json'
-  where getUrl config = do
-          m <- lookup method methodMap
-          return $ apiURL config ++ m ++ "/" ++ domain config
-        methodMap :: Map Method String
+  where methodMap :: Map Method String
         methodMap = mapFromList [(methodDelete, "delete")
                                 ,(methodPost, "create")
                                 ,(methodGet, "list")]
@@ -126,7 +123,7 @@ request url method headers body parser = do
   let req = r { method = method, requestHeaders = headers, requestBody = body }
   withManager tlsManagerSettings $ \manager ->
     withHTTP req manager $ \response ->
-      fmapL (const $ "Error parsing " ++ url) <$> evalStateT (parse parser) (responseBody response)
+      fmapL (const $ "error parsing " ++ url) <$> evalStateT (parse parser) (responseBody response)
 
 
 getIP :: [DNSRecord] -> Either String IP
