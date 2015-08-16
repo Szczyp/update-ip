@@ -20,6 +20,20 @@ executable update-ip
   main-is:             Main.hs
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base, bytestring, lens, errors, aeson, attoparsec, classy-prelude, pipes-http, http-client, pipes-attoparsec, lens-aeson, http-types, either, transformers
+  build-depends:       aeson
+                     , attoparsec
+                     , base
+                     , bytestring
+                     , classy-prelude
+                     , either
+                     , errors
+                     , filepath
+                     , http-client
+                     , http-types
+                     , lens
+                     , lens-aeson
+                     , pipes-attoparsec
+                     , pipes-http
+                     , transformers
   -- hs-source-dirs:      
   default-language:    Haskell2010

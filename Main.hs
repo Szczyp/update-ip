@@ -6,30 +6,30 @@ module Main where
 import           ClassyPrelude                     hiding (log)
 import           Control.Error.Util
 import           Control.Lens                      hiding ((.=))
-import           Control.Lens.Aeson                (key, values, _String)
 import           Control.Monad.Trans.Either
-import           Control.Monad.Trans.Reader
+import           Control.Monad.Trans.Reader        hiding (ask)
 import           Control.Monad.Trans.State.Strict
 import           Control.Monad.Trans.Writer.Strict
 import           Data.Aeson
-import           Data.Aeson.Parser                 (json')
-import           Data.Attoparsec.ByteString        (takeByteString)
+import           Data.Aeson.Lens                   (key, values, _String)
 import           Data.Attoparsec.Char8             (char, decimal, parseOnly)
 import           Data.Attoparsec.Types
 import           Data.ByteString.Lazy              (empty)
 import           Data.EitherR
+import           Data.Maybe                        (fromJust)
 import           Network.HTTP.Client
 import           Network.HTTP.Types
 import           Pipes.Attoparsec                  (parse)
 import           Pipes.HTTP
 import           Prelude                           (read)
 import           System.Environment
+import           System.FilePath
 
 main :: IO ()
 main = do
   config <- readConfig
   either configError runApp config
-  where configError = const $ print "config error"
+  where configError = const $ putStrLn "config error"
         runApp config = runEitherT (execWriterT (runReaderT app config))
                         >>= mapM_ print . either (return . pack) id
 
@@ -47,7 +47,7 @@ log t = lift $ tell [t]
 data AppConfig = AppConfig { configHeaders :: [Header]
                            , apiURL        :: String
                            , domain        :: String }
-                 deriving Read
+                 deriving (Show, Read)
 
 app :: App ()
 app = do
@@ -55,7 +55,7 @@ app = do
   dns <- requestDNSRecord
   ip <- liftEither $ getIP dns
   if ip == publicIP
-    then do log "IP didn't change"
+    then log "IP didn't change"
     else do deleteDNSRecord dns
             postDNSRecord publicIP
             log $ "IP changed from: " ++ ipToText ip ++ " to: " ++ ipToText publicIP
@@ -101,7 +101,7 @@ withAPI method body = do
   liftIOEither $ request
     (baseUrl ++ methodUrl ++ "/" ++ domain)
     method
-    ([("Content-type", "application/json")] ++ headers)
+    (("Content-type", "application/json") : headers)
     body
     json'
   where methodMap :: Map Method String
@@ -123,8 +123,7 @@ request url method headers body parser = do
   let req = r { method = method, requestHeaders = headers, requestBody = body }
   withManager tlsManagerSettings $ \manager ->
     withHTTP req manager $ \response ->
-      fmapL (const $ "error parsing " ++ url) <$> evalStateT (parse parser) (responseBody response)
-
+      fmapL (const $ "error parsing " ++ url) <$> evalStateT (fromJust <$> parse parser) (responseBody response)
 
 getIP :: [DNSRecord] -> Either String IP
 getIP = parseOnly parseIP . encodeUtf8 . view (_head . _1)
@@ -150,8 +149,8 @@ parseIP = do
 
 readConfig :: IO (Either SomeException AppConfig)
 readConfig = tryAny $ do
-  root <- getExecutablePath
-  contents <- readFile $ directory (fpFromString root) </> fpFromText "config"
+  root <- takeDirectory <$> getExecutablePath
+  contents <- readFile $ root </> "config"
   return $ read contents
 
 readConfig' :: IO (Either SomeException AppConfig)
