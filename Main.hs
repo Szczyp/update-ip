@@ -1,76 +1,120 @@
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric, FlexibleContexts, GeneralizedNewtypeDeriving,
+             MultiParamTypeClasses, NoImplicitPrelude, OverloadedStrings #-}
 
 module Main where
 
-import           ClassyPrelude                     hiding (log)
-import           Control.Error.Util
-import           Control.Lens                      hiding ((.=))
-import           Control.Monad.Trans.Either
-import           Control.Monad.Trans.Reader        hiding (ask)
-import           Control.Monad.Trans.State.Strict
-import           Control.Monad.Trans.Writer.Strict
-import           Data.Aeson
-import           Data.Aeson.Lens                   (key, values, _String)
-import           Data.Attoparsec.Char8             (char, decimal, parseOnly)
-import           Data.Attoparsec.Types
-import           Data.ByteString.Lazy              (empty)
-import           Data.EitherR
-import           Data.Maybe                        (fromJust)
-import           Network.HTTP.Client
-import           Network.HTTP.Types
-import           Pipes.Attoparsec                  (parse)
-import           Pipes.HTTP
-import           Prelude                           (read)
-import           System.Environment
-import           System.FilePath
+import ClassyPrelude
+import Control.Lens
+import Control.Monad.Except
+import Control.Monad.Trans.Control
+import Control.Monad.Writer.Strict
+import Data.Aeson
+import Data.Aeson.Lens
+import Data.Attoparsec.ByteString.Char8
+import Network.Wreq                     hiding (get, getWith, postWith)
+import Network.Wreq.Session
+import Network.Wreq.Types               (Postable)
+import System.Environment
+import System.FilePath
 
-main :: IO ()
-main = do
-  config <- readConfig
-  either configError runApp config
-  where configError = const $ putStrLn "config error"
-        runApp config = runEitherT (execWriterT (runReaderT app config))
-                        >>= mapM_ print . either (return . pack) id
+import qualified Data.CaseInsensitive as CI
 
-type App = ReaderT AppConfig (WriterT [Text] (EitherT String IO))
+newtype App a = App (ReaderT Config (WriterT Log (ExceptT AppError IO)) a)
+              deriving (Functor, Applicative, Monad, MonadIO, MonadReader Config
+                       , MonadWriter Log, MonadError AppError)
 
-liftIOEither :: IO (Either String a) -> App a
-liftIOEither = liftIO >=> liftEither
+newtype AppError = AppError Text
+instance Show AppError where
+  show (AppError e) = "Error: " ++ unpack e
 
-liftEither :: Either String a -> App a
-liftEither = lift . lift . hoistEither
+data ApiConfig = ApiConfig { configHeaders   :: [(Text, Text)]
+                           , configApiUrl    :: String
+                           , configDomain    :: Text
+                           , configSubDomain :: Text }
+                 deriving (Show, Generic)
+instance FromJSON ApiConfig
 
-log :: Text -> App ()
-log t = lift $ tell [t]
+data Config = Config { configSession :: Session
+                     , configApi     :: ApiConfig }
+              deriving Show
 
-data AppConfig = AppConfig { configHeaders :: [Header]
-                           , apiURL        :: String
-                           , domain        :: String }
-                 deriving (Show, Read)
-
-app :: App ()
-app = do
-  publicIP <- liftIOEither requestPublicIP
-  dns <- requestDNSRecord
-  ip <- liftEither $ getIP dns
-  if ip == publicIP
-    then log "IP didn't change"
-    else do deleteDNSRecord dns
-            postDNSRecord publicIP
-            log $ "IP changed from: " ++ ipToText ip ++ " to: " ++ ipToText publicIP
-
-requestPublicIP :: IO (Either String IP)
-requestPublicIP = request "http://wtfismyip.com/text" methodGet [] emptyBody parseIP
+type Log = [Text]
 
 type DNSRecord = (Text, Text, Text, Text)
 
-requestDNSRecord :: App [DNSRecord]
-requestDNSRecord = do
-  domain <- asks $ pack . domain
-  filter (predicate domain) . records <$> withAPI methodGet emptyBody
-  where predicate domain (_, t, n, _) = (t, n) == ("A", domain)
-        records = zip4
+data IP = IP Word8 Word8 Word8 Word8 deriving (Show, Eq)
+
+ipToText :: IP -> Text
+ipToText (IP a b c d) = pack . join . intersperse "." . map show $ [a, b, c, d]
+
+throw :: MonadError AppError m => Text -> m a
+throw = throwError . AppError
+
+parseIP :: MonadError AppError m => LByteString -> m IP
+parseIP = either (const $ throw "can't parse IP") return
+          . over _Left (AppError . pack) . eitherResult . parse parser . toStrict
+  where parser = IP <$> decimalDot <*> decimalDot <*> decimalDot <*> decimal
+        decimalDot = decimal <* char '.'
+
+getPublicIP :: (MonadReader Config m, MonadError AppError m, MonadIO m) => m IP
+getPublicIP = do
+  sess <- configSession <$> ask
+  view responseBody <$> liftIO (get sess "https://wtfismyip.com/text") >>= parseIP
+
+apiHeaders :: MonadReader Config m => m Options
+apiHeaders = do
+  hs <- map (over _1 CI.mk . over each encodeUtf8) . configHeaders . configApi <$> ask
+  return $ over headers (++ ("Content-type", "application/json") : hs) defaults
+
+apiUrl :: MonadReader Config m => String -> m String
+apiUrl url = do
+  (aUrl, domain) <- ((,) <$> configApiUrl <*> configDomain) . configApi <$> ask
+  return $ aUrl ++ url ++ "/" ++ unpack domain
+
+apiDomain :: MonadReader Config m => m (Text, Text)
+apiDomain = ((,) <$> configDomain <*> configSubDomain) . configApi <$> ask
+
+withApi :: (MonadIO m, MonadReader Config m) =>
+           (Options -> Session -> String -> IO (Response a)) -> String -> m a
+withApi method actionUrl = do
+  sess <- configSession <$> ask
+  opts <- apiHeaders
+  url <- apiUrl actionUrl
+  view responseBody <$> liftIO (method opts sess url)
+
+apiGET :: (MonadIO m, MonadReader Config m) => String -> m LByteString
+apiGET = withApi getWith
+
+apiPOST :: (MonadIO m, MonadReader Config m, Postable a) => a -> String -> m LByteString
+apiPOST body = withApi $ \o s u -> postWith o s u body
+
+message :: LByteString -> Text
+message = view $ key "result" . key "message" . _String
+
+getIP :: (MonadError AppError m, MonadIO m) => [DNSRecord] -> m IP
+getIP = parseIP . encodeUtf8 . fromStrict . view (_head . _1)
+
+readConfig :: (MonadError AppError m, MonadBaseControl IO m, MonadIO m) => m ApiConfig
+readConfig = (do root <- takeDirectory <$> liftIO getExecutablePath
+                 readFile (root </> "config.json")) `catchAny` fileError
+             >>= maybe parseError return . decode
+  where fileError = const $ throw "Can't find config file"
+        parseError = throw "Can't parse config file"
+
+readConfig' :: (MonadError AppError m, MonadBaseControl IO m, MonadIO m) => m ApiConfig
+readConfig' = readFile "config.json" `catchAny` fileError
+              >>= maybe parseError return . decode
+              where fileError = const $ throw "Can't find config file"
+                    parseError = throw "Can't parse config file"
+
+getDNSRecord :: App [DNSRecord]
+getDNSRecord = do
+  (domain, subDomain) <- apiDomain
+  let predicate (_, t, n, _) = (t, n) == ("A", if subDomain == ""
+                                               then domain
+                                               else subDomain ++ "." ++ domain)
+  filter predicate . records <$> apiGET "list"
+  where records = zip4
                   <$> scope "content"
                   <*> scope "type"
                   <*> scope "name"
@@ -78,80 +122,35 @@ requestDNSRecord = do
         scope k = toListOf $ key "records" . values . key k . _String
 
 deleteDNSRecord :: [DNSRecord] -> App Text
-deleteDNSRecord dns = message <$> withAPI methodDelete body
-  where body = RequestBodyLBS
-               . encode
-               . object
-               $ [("record_id", String (dns ^. _head . _4))]
+deleteDNSRecord dns = message <$> apiPOST body "delete"
+  where body = object [("record_id", String (dns ^. _head . _4))]
 
-postDNSRecord :: IP -> App Text
-postDNSRecord ip = message <$> withAPI methodPost body
-  where body = RequestBodyLBS
-               . encode
-               . object
-               $ [("type", String "A")
-                 ,("hostname" , String "")
-                 ,("content", String . ipToText $ ip)
-                 ,("ttl", Number 300)]
+createDNSRecord :: IP -> App Text
+createDNSRecord ip = do
+  subDomain <- snd <$> apiDomain
+  let body = object [("type", String "A")
+                    ,("hostname" , String subDomain)
+                    ,("content", String $ ipToText ip)
+                    ,("ttl", Number 300)]
+  message <$> apiPOST body "create"
 
-withAPI :: ByteString -> RequestBody -> App Value
-withAPI method body = do
-  AppConfig headers baseUrl domain <- ask
-  methodUrl <- liftEither . note "invalid method" $ lookup method methodMap
-  liftIOEither $ request
-    (baseUrl ++ methodUrl ++ "/" ++ domain)
-    method
-    (("Content-type", "application/json") : headers)
-    body
-    json'
-  where methodMap :: Map Method String
-        methodMap = mapFromList [(methodDelete, "delete")
-                                ,(methodPost, "create")
-                                ,(methodGet, "list")]
+mainApp :: App ()
+mainApp = do
+  publicIP <- getPublicIP
+  dns <- getDNSRecord
+  if null dns
+    then do createDNSRecord publicIP
+            tell ["New record with IP: " ++ ipToText publicIP]
+    else do ip <- getIP dns
+            if ip == publicIP
+              then tell ["IP didn't change: " ++ ipToText ip]
+              else do deleteDNSRecord dns
+                      createDNSRecord publicIP
+                      tell ["IP changed: " ++ ipToText ip ++ " -> " ++ ipToText publicIP]
 
-message :: Value -> Text
-message = view $ key "result" . key "message" . _String
+runApp :: App a -> Session -> IO (Either AppError (a, Log))
+runApp (App app) sess =
+  runExceptT $ readConfig' >>= runWriterT . runReaderT app . Config sess
 
-request :: String
-        -> Method
-        -> [Header]
-        -> RequestBody
-        -> Parser ByteString a
-        -> IO (Either String a)
-request url method headers body parser = do
-  r <- parseUrl url
-  let req = r { method = method, requestHeaders = headers, requestBody = body }
-  withManager tlsManagerSettings $ \manager ->
-    withHTTP req manager $ \response ->
-      fmapL (const $ "error parsing " ++ url) <$> evalStateT (fromJust <$> parse parser) (responseBody response)
-
-getIP :: [DNSRecord] -> Either String IP
-getIP = parseOnly parseIP . encodeUtf8 . view (_head . _1)
-
-emptyBody :: RequestBody
-emptyBody = RequestBodyLBS empty
-
-data IP = IP Word8 Word8 Word8 Word8 deriving (Show, Eq)
-
-ipToText :: IP -> Text
-ipToText (IP a b c d) = pack . join . intersperse "." . map show $ [a, b, c, d]
-
-parseIP :: Parser ByteString IP
-parseIP = do
-  a <- decimal
-  char '.'
-  b <- decimal
-  char '.'
-  c <- decimal
-  char '.'
-  d <- decimal
-  return $ IP a b c d
-
-readConfig :: IO (Either SomeException AppConfig)
-readConfig = tryAny $ do
-  root <- takeDirectory <$> getExecutablePath
-  contents <- readFile $ root </> "config"
-  return $ read contents
-
-readConfig' :: IO (Either SomeException AppConfig)
-readConfig' = tryAny $ read <$> readFile "config"
+main :: IO ()
+main = withSession $ runApp mainApp >=> either print (putStr . unlines . snd)

@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                update-ip
-version:             0.2.0.0
+version:             0.3.0.0
 synopsis:            Updates a dns record on name.com if public ip changed
 -- description:         
 homepage:            http://github.com/Szczyp/update-ip
@@ -14,7 +14,7 @@ maintainer:          qb@szczyp.com
 category:            Network
 build-type:          Simple
 -- extra-source-files:  
-cabal-version:       >=1.18
+cabal-version:       >=1.22
 
 executable update-ip
   main-is:             Main.hs
@@ -23,17 +23,14 @@ executable update-ip
   build-depends:       aeson
                      , attoparsec
                      , base
-                     , bytestring
+                     , case-insensitive
                      , classy-prelude
-                     , either
-                     , errors
                      , filepath
-                     , http-client
-                     , http-types
                      , lens
                      , lens-aeson
-                     , pipes-attoparsec
-                     , pipes-http
-                     , transformers
+                     , monad-control
+                     , mtl
+                     , transformers-base
+                     , wreq
   -- hs-source-dirs:      
   default-language:    Haskell2010

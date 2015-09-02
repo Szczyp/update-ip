@@ -1,5 +1,4 @@
-cabal.sandbox.config
-.cabal-sandbox
-dist
-config
-TAGS
+/dist
+/TAGS
+/stylish
+/config.json
