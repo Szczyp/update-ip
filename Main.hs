@@ -74,18 +74,24 @@ apiUrl url = do
 apiDomain :: MonadReader Config m => m (Text, Text)
 apiDomain = ((,) <$> configDomain <*> configSubDomain) . configApi <$> ask
 
-withApi :: (MonadIO m, MonadReader Config m) =>
+withApi :: (MonadIO m, MonadReader Config m, MonadError AppError m, AsValue a) =>
            (Options -> Session -> String -> IO (Response a)) -> String -> m a
 withApi method actionUrl = do
   sess <- configSession <$> ask
   opts <- apiHeaders
   url <- apiUrl actionUrl
-  view responseBody <$> liftIO (method opts sess url)
+  r <- view responseBody <$> liftIO (method opts sess url)
+  let code = r ^? key "result" . key "code" . _Number
+      msg = r ^? key "result" . key "message" . _String
+  case code of
+    Just 100 -> return r
+    _ -> throw $ fromMaybe "Unknown error" msg
 
-apiGET :: (MonadIO m, MonadReader Config m) => String -> m LByteString
+apiGET :: (MonadIO m, MonadReader Config m, MonadError AppError m) => String -> m LByteString
 apiGET = withApi getWith
 
-apiPOST :: (MonadIO m, MonadReader Config m, Postable a) => a -> String -> m LByteString
+apiPOST :: (MonadIO m, MonadReader Config m, MonadError AppError m, Postable a) =>
+           a -> String -> m LByteString
 apiPOST body = withApi $ \o s u -> postWith o s u body
 
 message :: LByteString -> Text
