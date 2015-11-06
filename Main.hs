@@ -98,7 +98,7 @@ message :: LByteString -> Text
 message = view $ key "result" . key "message" . _String
 
 getIP :: (MonadError AppError m, MonadIO m) => [DNSRecord] -> m IP
-getIP = parseIP . encodeUtf8 . fromStrict . view (_head . _1)
+getIP = parseIP . (++ "\n") . fromStrict . encodeUtf8 . view (_head . _1)
 
 readConfig :: (MonadError AppError m, MonadBaseControl IO m, MonadIO m) => m ApiConfig
 readConfig = (do root <- takeDirectory <$> liftIO getExecutablePath
