@@ -28,6 +28,7 @@ executable update-ip
                      , filepath
                      , lens
                      , lens-aeson
+                     , lifted-async
                      , monad-control
                      , mtl
                      , transformers-base

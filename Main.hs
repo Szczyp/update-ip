@@ -1,10 +1,12 @@
 {-# LANGUAGE DeriveGeneric, FlexibleContexts, GeneralizedNewtypeDeriving,
-             MultiParamTypeClasses, NoImplicitPrelude, OverloadedStrings #-}
+             MultiParamTypeClasses, NoImplicitPrelude, OverloadedStrings, TypeFamilies #-}
 
 module Main where
 
 import ClassyPrelude
+import Control.Concurrent.Async.Lifted
 import Control.Lens
+import Control.Monad.Base
 import Control.Monad.Except
 import Control.Monad.Trans.Control
 import Control.Monad.Writer.Strict
@@ -21,7 +23,13 @@ import qualified Data.CaseInsensitive as CI
 
 newtype App a = App (ReaderT Config (WriterT Log (ExceptT AppError IO)) a)
               deriving (Functor, Applicative, Monad, MonadIO, MonadReader Config
-                       , MonadWriter Log, MonadError AppError)
+                       , MonadWriter Log, MonadError AppError, MonadBase IO)
+
+instance MonadBaseControl IO App where
+  type StM App a = Either AppError (a, Log)
+  liftBaseWith f = App $ liftBaseWith $ \r -> f (r . unApp)
+    where unApp (App a) = a
+  restoreM = App . restoreM
 
 newtype AppError = AppError Text
 instance Show AppError where
@@ -142,8 +150,9 @@ createDNSRecord ip = do
 
 mainApp :: App ()
 mainApp = do
-  publicIP <- getPublicIP
-  dns <- getDNSRecord
+  (publicIP, dns) <- runConcurrently $ (,)
+                     <$> Concurrently getPublicIP
+                     <*> Concurrently getDNSRecord
   if null dns
     then do createDNSRecord publicIP
             tell ["New record with IP: " ++ ipToText publicIP]
@@ -160,3 +169,6 @@ runApp (App app) sess =
 
 main :: IO ()
 main = withSession $ runApp mainApp >=> either print (putStr . unlines . snd)
+
+uip :: App a -> IO (Either AppError (a, Log))
+uip = withSession . runApp
