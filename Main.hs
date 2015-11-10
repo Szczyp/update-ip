@@ -159,11 +159,11 @@ mainApp = do
                       tell ["IP changed: " ++ ipToText ip ++ " -> " ++ ipToText publicIP]
 
 runApp :: App a -> Session -> IO (Either AppError (a, Log))
-runApp (App app) sess =
-  runExceptT $ readConfig >>= runWriterT . runReaderT app . Config sess
+runApp (App app) sess = runExceptT $ runWriterT . runReaderT app . Config sess =<< readConfig
 
 main :: IO ()
 main = withSession $ runApp mainApp >=> either print (putStr . unlines . snd)
 
-uip :: App a -> IO (Either AppError (a, Log))
-uip = withSession . runApp
+uip :: (Show a) => App a -> IO ()
+uip = withSession . runApp >=> either print (print . fst)
+
