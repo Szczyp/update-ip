@@ -109,17 +109,12 @@ getIP :: (MonadError AppError m, MonadIO m) => [DNSRecord] -> m IP
 getIP = parseIP . (++ "\n") . fromStrict . encodeUtf8 . view (_head . _1)
 
 readConfig :: (MonadError AppError m, MonadBaseControl IO m, MonadIO m) => m ApiConfig
-readConfig = (do root <- takeDirectory <$> liftIO getExecutablePath
-                 readFile (root </> "config.json")) `catchAny` fileError
+readConfig = liftIO (do root <- takeDirectory <$> liftIO getExecutablePath
+                        readFile (root </> "config.json")
+                     <|> readFile "config.json") `catchAny` fileError
              >>= maybe parseError return . decode
   where fileError = const $ throw "Can't find config file"
         parseError = throw "Can't parse config file"
-
-readConfig' :: (MonadError AppError m, MonadBaseControl IO m, MonadIO m) => m ApiConfig
-readConfig' = readFile "config.json" `catchAny` fileError
-              >>= maybe parseError return . decode
-              where fileError = const $ throw "Can't find config file"
-                    parseError = throw "Can't parse config file"
 
 getDNSRecord :: App [DNSRecord]
 getDNSRecord = do
@@ -165,7 +160,7 @@ mainApp = do
 
 runApp :: App a -> Session -> IO (Either AppError (a, Log))
 runApp (App app) sess =
-  runExceptT $ readConfig' >>= runWriterT . runReaderT app . Config sess
+  runExceptT $ readConfig >>= runWriterT . runReaderT app . Config sess
 
 main :: IO ()
 main = withSession $ runApp mainApp >=> either print (putStr . unlines . snd)
