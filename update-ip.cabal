@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                update-ip
-version:             0.3.0.0
+version:             0.3.1.0
 synopsis:            Updates a dns record on name.com if public ip changed
 -- description:         
 homepage:            http://github.com/Szczyp/update-ip

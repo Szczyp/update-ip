@@ -3,7 +3,7 @@
 
 module Main where
 
-import ClassyPrelude
+import ClassyPrelude hiding (log)
 import Control.Concurrent.Async.Lifted
 import Control.Lens
 import Control.Monad.Base
@@ -143,6 +143,11 @@ createDNSRecord ip = do
                     ,("ttl", Number 300)]
   message <$> apiPOST body "create"
 
+log :: (MonadWriter [Text] m, MonadIO m) => Text -> m ()
+log msg = do
+  time <- liftIO getCurrentTime
+  tell [pack (show time) ++ ": " ++ msg]
+
 mainApp :: App ()
 mainApp = do
   (publicIP, dns) <- runConcurrently $ (,)
@@ -150,20 +155,20 @@ mainApp = do
                      <*> Concurrently getDNSRecord
   if null dns
     then do createDNSRecord publicIP
-            tell ["New record with IP: " ++ ipToText publicIP]
+            log $ "New record with IP: " ++ ipToText publicIP
     else do ip <- getIP dns
             if ip == publicIP
-              then tell ["IP didn't change: " ++ ipToText ip]
+              then log $ "IP didn't change: " ++ ipToText ip
               else do deleteDNSRecord dns
                       createDNSRecord publicIP
-                      tell ["IP changed: " ++ ipToText ip ++ " -> " ++ ipToText publicIP]
+                      log $ "IP changed: " ++ ipToText ip ++ " -> " ++ ipToText publicIP
 
 runApp :: App a -> Session -> IO (Either AppError (a, Log))
 runApp (App app) sess = runExceptT $ runWriterT . runReaderT app . Config sess =<< readConfig
 
 main :: IO ()
-main = withSession $ runApp mainApp >=> either print (putStr . unlines . snd)
+main = withAPISession $ runApp mainApp >=> either print (putStr . unlines . snd)
 
 uip :: (Show a) => App a -> IO ()
-uip = withSession . runApp >=> either print (print . fst)
+uip = withAPISession . runApp >=> either print (print . fst)
 
