@@ -1,23 +1,26 @@
+{-# OPTIONS -fno-warn-name-shadowing -fno-warn-unused-do-bind #-}
 {-# LANGUAGE DeriveGeneric, FlexibleContexts, GeneralizedNewtypeDeriving,
-             MultiParamTypeClasses, NoImplicitPrelude, OverloadedStrings, TypeFamilies #-}
+             MultiParamTypeClasses, NoImplicitPrelude, OverloadedStrings, TypeFamilies
+             #-}
 
 module Main where
 
-import ClassyPrelude hiding (log)
-import Control.Concurrent.Async.Lifted
-import Control.Lens
-import Control.Monad.Base
-import Control.Monad.Except
-import Control.Monad.Trans.Control
-import Control.Monad.Writer.Strict
-import Data.Aeson
-import Data.Aeson.Lens
-import Data.Attoparsec.ByteString.Char8
-import Network.Wreq                     hiding (get, getWith, postWith)
-import Network.Wreq.Session
-import Network.Wreq.Types               (Postable)
-import System.Environment
-import System.FilePath
+import           ClassyPrelude                    hiding (log)
+import           Control.Concurrent.Async.Lifted
+import           Control.Lens
+import           Control.Monad.Base
+import           Control.Monad.Except
+import           Control.Monad.Trans.Control
+import           Control.Monad.Writer.Strict
+import           Data.Aeson
+import           Data.Aeson.Lens
+import           Data.Attoparsec.ByteString.Char8
+import           Network.Wreq                     hiding (get, getWith, postWith)
+import qualified Network.Wreq                     as Wreq
+import           Network.Wreq.Session
+import           Network.Wreq.Types               (Postable)
+import           System.Environment
+import           System.FilePath
 
 import qualified Data.CaseInsensitive as CI
 
@@ -35,15 +38,15 @@ newtype AppError = AppError Text
 instance Show AppError where
   show (AppError e) = "Error: " ++ unpack e
 
-data ApiConfig = ApiConfig { configHeaders   :: [(Text, Text)]
-                           , configApiUrl    :: String
-                           , configDomain    :: Text
-                           , configSubDomain :: Text }
+data ApiConfig = ApiConfig { headers   :: [(Text, Text)]
+                           , url       :: String
+                           , domain    :: Text
+                           , subDomain :: Text }
                  deriving (Show, Generic)
 instance FromJSON ApiConfig
 
-data Config = Config { configSession :: Session
-                     , configApi     :: ApiConfig }
+data Config = Config { session   :: Session
+                     , apiConfig :: ApiConfig }
               deriving Show
 
 type Log = [Text]
@@ -66,29 +69,29 @@ parseIP = either (const $ throw "can't parse IP") return
 
 getPublicIP :: (MonadReader Config m, MonadError AppError m, MonadIO m) => m IP
 getPublicIP = do
-  sess <- configSession <$> ask
-  view responseBody <$> liftIO (get sess "https://wtfismyip.com/text") >>= parseIP
+  session <- session <$> ask
+  view responseBody <$> liftIO (get session "https://wtfismyip.com/text") >>= parseIP
 
 apiHeaders :: MonadReader Config m => m Options
 apiHeaders = do
-  hs <- map (over _1 CI.mk . over each encodeUtf8) . configHeaders . configApi <$> ask
-  return $ over headers (++ ("Content-type", "application/json") : hs) defaults
+  hs <- map (over _1 CI.mk . over each encodeUtf8) . Main.headers . apiConfig <$> ask
+  return $ over Wreq.headers (++ ("Content-type", "application/json") : hs) defaults
 
 apiUrl :: MonadReader Config m => String -> m String
 apiUrl url = do
-  (aUrl, domain) <- ((,) <$> configApiUrl <*> configDomain) . configApi <$> ask
+  (aUrl, domain) <- ((,) <$> Main.url <*> domain) . apiConfig <$> ask
   return $ aUrl ++ url ++ "/" ++ unpack domain
 
 apiDomain :: MonadReader Config m => m (Text, Text)
-apiDomain = ((,) <$> configDomain <*> configSubDomain) . configApi <$> ask
+apiDomain = ((,) <$> domain <*> subDomain) . apiConfig <$> ask
 
 withApi :: (MonadIO m, MonadReader Config m, MonadError AppError m, AsValue a) =>
            (Options -> Session -> String -> IO (Response a)) -> String -> m a
 withApi method actionUrl = do
-  sess <- configSession <$> ask
+  session <- session <$> ask
   opts <- apiHeaders
   url <- apiUrl actionUrl
-  r <- view responseBody <$> liftIO (method opts sess url)
+  r <- view responseBody <$> liftIO (method opts session url)
   let code = r ^? key "result" . key "code" . _Number
       msg = r ^? key "result" . key "message" . _String
   case code of
@@ -105,7 +108,7 @@ apiPOST body = withApi $ \o s u -> postWith o s u body
 message :: LByteString -> Text
 message = view $ key "result" . key "message" . _String
 
-getIP :: (MonadError AppError m, MonadIO m) => [DNSRecord] -> m IP
+getIP :: (MonadError AppError m) => [DNSRecord] -> m IP
 getIP = parseIP . (++ "\n") . fromStrict . encodeUtf8 . view (_head . _1)
 
 readConfig :: (MonadError AppError m, MonadBaseControl IO m, MonadIO m) => m ApiConfig
@@ -143,7 +146,7 @@ createDNSRecord ip = do
                     ,("ttl", Number 300)]
   message <$> apiPOST body "create"
 
-log :: (MonadWriter [Text] m, MonadIO m) => Text -> m ()
+log :: (MonadWriter Log m, MonadIO m) => Text -> m ()
 log msg = do
   time <- liftIO getCurrentTime
   tell [pack (show time) ++ ": " ++ msg]
@@ -164,7 +167,7 @@ mainApp = do
                       log $ "IP changed: " ++ ipToText ip ++ " -> " ++ ipToText publicIP
 
 runApp :: App a -> Session -> IO (Either AppError (a, Log))
-runApp (App app) sess = runExceptT $ runWriterT . runReaderT app . Config sess =<< readConfig
+runApp (App app) session = runExceptT $ runWriterT . runReaderT app . Config session =<< readConfig
 
 main :: IO ()
 main = withAPISession $ runApp mainApp >=> either print (putStr . unlines . snd)
