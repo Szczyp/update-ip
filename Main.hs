@@ -1,11 +1,12 @@
 {-# OPTIONS -fno-warn-name-shadowing -fno-warn-unused-do-bind #-}
 {-# LANGUAGE DeriveGeneric, FlexibleContexts, GeneralizedNewtypeDeriving,
-             MultiParamTypeClasses, NoImplicitPrelude, OverloadedStrings, TypeFamilies
-             #-}
+             MultiParamTypeClasses, NoImplicitPrelude, OverloadedStrings,
+             TypeFamilies #-}
 
 module Main where
 
-import           ClassyPrelude                    hiding (log)
+import           ClassyPrelude                    hiding
+    (Concurrently, log, runConcurrently, throw)
 import           Control.Concurrent.Async.Lifted
 import           Control.Lens
 import           Control.Monad.Base
@@ -15,7 +16,8 @@ import           Control.Monad.Writer.Strict
 import           Data.Aeson
 import           Data.Aeson.Lens
 import           Data.Attoparsec.ByteString.Char8
-import           Network.Wreq                     hiding (get, getWith, postWith)
+import           Network.Wreq                     hiding
+    (get, getWith, postWith)
 import qualified Network.Wreq                     as Wreq
 import           Network.Wreq.Session
 import           Network.Wreq.Types               (Postable)
@@ -96,7 +98,7 @@ withApi method actionUrl = do
       msg = r ^? key "result" . key "message" . _String
   case code of
     Just 100 -> return r
-    _ -> throw $ fromMaybe "Unknown error" msg
+    _        -> throw $ fromMaybe "Unknown error" msg
 
 apiGET :: (MonadIO m, MonadReader Config m, MonadError AppError m) => String -> m LByteString
 apiGET = withApi getWith
@@ -111,7 +113,11 @@ message = view $ key "result" . key "message" . _String
 getIP :: (MonadError AppError m) => [DNSRecord] -> m IP
 getIP = parseIP . (++ "\n") . fromStrict . encodeUtf8 . view (_head . _1)
 
-readConfig :: (MonadError AppError m, MonadBaseControl IO m, MonadIO m) => m ApiConfig
+readConfig :: ( MonadCatch m
+              , MonadError AppError m
+              , MonadBaseControl IO m
+              , MonadIO m)
+           => m ApiConfig
 readConfig = liftIO (do root <- takeDirectory <$> liftIO getExecutablePath
                         readFile (root </> "config.json")
                      <|> readFile "config.json") `catchAny` fileError
