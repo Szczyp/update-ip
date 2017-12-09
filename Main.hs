@@ -121,9 +121,22 @@ readConfig :: ( MonadCatch m
 readConfig = liftIO (do root <- takeDirectory <$> liftIO getExecutablePath
                         readFile (root </> "config.json")
                      <|> readFile "config.json") `catchAny` fileError
-             >>= maybe parseError return . decode
+             >>= maybe parseError return . decodeStrict
   where fileError = const $ throw "Can't find config file"
         parseError = throw "Can't parse config file"
+
+exportDNSRecords :: App ()
+exportDNSRecords = writeFile "DNS records" =<< toStrict . encode . map toJSON . records <$> apiGET "list"
+  where records = zip4
+                  <$> scope "type"
+                  <*> scope "name"
+                  <*> scope "content"
+                  <*> scope "ttl"
+        scope k = toListOf $ key "records" . values . key k . _String
+        toJSON record = object [("type", String $ record ^. _1)
+                               ,("hostname" , String $ record ^. _2)
+                               ,("content", String $ record ^. _3)
+                               ,("ttl", String $ record ^. _4)]
 
 getDNSRecord :: App [DNSRecord]
 getDNSRecord = do
